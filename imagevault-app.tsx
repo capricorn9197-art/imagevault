@@ -801,7 +801,7 @@ function LoginScreen() {
             <div className="space-y-3">
               <div className="flex items-center gap-2 text-blue-600"><Shield className="w-5 h-5" /><p className="text-sm font-semibold">Two-Factor Verification</p></div>
               <p className="text-xs text-slate-500">As {ROLES[tempUser?.role]?.label}, your account requires 2FA. Demo code: <code className="bg-slate-100 px-1.5 py-0.5 rounded font-mono">123456</code></p>
-              <input value={twoFA} onChange={e => setTwoFA(e.target.value)} maxLength={6} placeholder="6-digit code" className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm font-mono text-center tracking-widest text-lg" autoFocus />
+              <input value={twoFA} onChange={e => setTwoFA(e.target.value)} onKeyDown={e => e.key === 'Enter' && verify2FA()} maxLength={6} placeholder="6-digit code" className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm font-mono text-center tracking-widest text-lg" autoFocus />
               <button onClick={verify2FA} className="w-full bg-blue-600 text-white py-2.5 rounded-lg font-medium">Verify</button>
               <button onClick={() => { setNeed2FA(false); setTempUser(null); setTwoFA(''); }} className="w-full text-xs text-slate-500">Cancel</button>
             </div>
@@ -834,7 +834,7 @@ function LoginScreen() {
               </div>
               <div>
                 <label className="text-xs font-medium text-slate-600 mb-1 block">Confirm Password</label>
-                <input type={showPassword ? 'text' : 'password'} value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} placeholder="Type again" className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm" />
+                <input type={showPassword ? 'text' : 'password'} value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} onKeyDown={e => e.key === 'Enter' && setupAdmin()} placeholder="Type again" className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm" />
               </div>
               <label className="flex items-center gap-2 text-xs cursor-pointer">
                 <input type="checkbox" checked={showPassword} onChange={e => setShowPassword(e.target.checked)} className="w-3.5 h-3.5" />
@@ -900,7 +900,7 @@ function LoginScreen() {
                   </div>
                   <div>
                     <label className="text-xs font-medium text-slate-600 mb-1 block">Confirm Password</label>
-                    <input type={showPassword ? 'text' : 'password'} value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} placeholder="Type again" className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm" />
+                    <input type={showPassword ? 'text' : 'password'} value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} onKeyDown={e => e.key === 'Enter' && redeemInvite()} placeholder="Type again" className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm" />
                   </div>
                   <label className="flex items-center gap-2 text-xs cursor-pointer">
                     <input type="checkbox" checked={showPassword} onChange={e => setShowPassword(e.target.checked)} className="w-3.5 h-3.5" />
@@ -1573,17 +1573,12 @@ function UploadTab() {
   const aiSuggest = async (item) => {
     setAiBusy(p => ({ ...p, [item.tempId]: true }));
     try {
-      const result = await aiVision.autoTag(item.full, { mode: 'enhanced' });
-      const tags = result.tags || [];
-      const structured = result.structured || {};
+      const tags = await aiVision.autoTag(item.full);
       if (tags.length) {
-        update(item.tempId, {
-          keywords: Array.from(new Set([...item.keywords, ...tags])),
-          aiStructured: structured,
-        });
+        update(item.tempId, { keywords: Array.from(new Set([...item.keywords, ...tags])) });
         showToast(`✨ AI added ${tags.length} tags`);
       } else showToast('AI returned no tags', 'error');
-    } catch { showToast('AI failed', 'error'); }
+    } catch (e) { console.error('[aiSuggest]', e); showToast('AI failed', 'error'); }
     setAiBusy(p => ({ ...p, [item.tempId]: false }));
   };
 
@@ -1825,11 +1820,25 @@ function ImagePreview({ img, onClose }) {
   const versionCount = ((data.imageVersions || {})[img.id] || []).length;
 
   useEffect(() => {
-    imageRepo.getFull(img.id).then(f => f && setFullSrc(f));
+    let cancel = false;
+    imageRepo.getFull(img.id).then(f => { if (!cancel && f) setFullSrc(f); });
+    return () => { cancel = true; };
   }, [img.id]);
 
-  const toggleFav = async () => { const list = data.favorites || []; await persistData({ ...data, favorites: isFav ? list.filter(x => x !== img.id) : [...list, img.id] }); showToast(isFav ? 'Unstarred' : 'Starred'); };
-  const togglePin = async () => { const list = data.pinned || []; await persistData({ ...data, pinned: isPin ? list.filter(x => x !== img.id) : [...list, img.id] }); };
+  const toggleFav = async () => {
+    const list = data.favorites || [];
+    try {
+      await persistData({ ...data, favorites: isFav ? list.filter(x => x !== img.id) : [...list, img.id] });
+      showToast(isFav ? 'Unstarred' : 'Starred');
+    } catch { showToast('Failed to save', 'error'); }
+  };
+  const togglePin = async () => {
+    const list = data.pinned || [];
+    try {
+      await persistData({ ...data, pinned: isPin ? list.filter(x => x !== img.id) : [...list, img.id] });
+      showToast(isPin ? 'Unpinned' : 'Pinned');
+    } catch { showToast('Failed to save', 'error'); }
+  };
   const saveKw = async () => {
     if (!canEditKw) return showToast('You can only edit keywords on your own uploads', 'error');
     // Save version before change
@@ -2034,7 +2043,7 @@ function ShareModal({ images, onClose }) {
 
         {/* Mode tabs */}
         <div className="bg-slate-100 p-1 rounded-lg grid grid-cols-2 gap-1">
-          <button onClick={() => setMode('manual')} className={`py-2 px-3 rounded-md text-xs font-medium transition ${mode === 'manual' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}>📱 Manual (Free)</button>
+          <button onClick={() => { setMode('manual'); setSaveCustomer(false); setCustomerName(''); }} className={`py-2 px-3 rounded-md text-xs font-medium transition ${mode === 'manual' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}>📱 Manual (Free)</button>
           <button onClick={() => setMode('direct')} className={`py-2 px-3 rounded-md text-xs font-medium transition flex items-center justify-center gap-1 ${mode === 'direct' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}>
             ⚡ Direct API
             {gupshupConfig.mockMode && mode === 'direct' && <span className="text-[9px] bg-amber-100 text-amber-700 px-1 rounded font-bold">MOCK</span>}
@@ -2087,7 +2096,7 @@ function ShareModal({ images, onClose }) {
               <button onClick={downloadAndShare} disabled={downloading || imagesDownloaded} className="w-full bg-blue-600 text-white py-2.5 rounded-lg font-medium text-sm flex items-center justify-center gap-2 disabled:opacity-60">
                 {downloading ? <><Loader2 className="w-4 h-4 animate-spin" /> Downloading...</> : imagesDownloaded ? <><Check className="w-4 h-4" /> Downloaded</> : <><Download className="w-4 h-4" /> Step 1: Download</>}
               </button>
-              <button onClick={openWA} className="w-full bg-emerald-500 text-white py-2.5 rounded-lg font-medium text-sm flex items-center justify-center gap-2"><Send className="w-4 h-4" /> Step 2: Open WhatsApp</button>
+              <button onClick={openWA} disabled={!imagesDownloaded} className="w-full bg-emerald-500 text-white py-2.5 rounded-lg font-medium text-sm flex items-center justify-center gap-2 disabled:opacity-50 disabled:bg-slate-300"><Send className="w-4 h-4" /> Step 2: Open WhatsApp</button>
             </div>
           </>
         )}
@@ -2218,7 +2227,8 @@ function CollDetail({ coll, onBack }) {
       const fulls = await Promise.all(collImages.map(async i => ({ ...i, src: (await imageRepo.getFull(i.id)) || i.thumbnail })));
       const brand = data.settings?.brandName || 'Brinda Sweets Baker\'s Lounge';
       const wm = data.settings?.watermarkText || brand;
-      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${coll.name} · ${brand}</title><style>
+      const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(coll.name)} · ${esc(brand)}</title><style>
         @media print { @page { margin: 1cm; } body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
         body{font-family:system-ui,-apple-system,sans-serif;margin:0;padding:24px;color:#1e293b;background:#fff}
         .brand-header{display:flex;align-items:center;gap:12px;padding:14px 18px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:14px;color:#fff;margin-bottom:18px;box-shadow:0 4px 12px rgba(37,99,235,0.18)}
@@ -2247,16 +2257,16 @@ function CollDetail({ coll, onBack }) {
         <div class="brand-header">
           <div class="brand-badge">🍰</div>
           <div>
-            <p class="brand-name">${brand}</p>
+            <p class="brand-name">${esc(brand)}</p>
             <p class="brand-tag">Curated Catalog</p>
           </div>
         </div>
-        <h1>${coll.name}</h1>
-        <div class="sub">${coll.theme ? coll.theme + ' · ' : ''}${fulls.length} items · Generated ${utils.date(Date.now())}</div>
-        <div class="grid">${fulls.map(i => `<div class="card"><img src="${i.src}" alt=""/><div class="info"><p>${i.name}</p><div class="tags">${i.keywords.slice(0, 4).map(k => `<span class="tag">${k}</span>`).join('')}</div></div></div>`).join('')}</div>
+        <h1>${esc(coll.name)}</h1>
+        <div class="sub">${coll.theme ? esc(coll.theme) + ' · ' : ''}${fulls.length} items · Generated ${esc(utils.date(Date.now()))}</div>
+        <div class="grid">${fulls.map(i => `<div class="card"><img src="${esc(i.src)}" alt=""/><div class="info"><p>${esc(i.name)}</p><div class="tags">${i.keywords.slice(0, 4).map(k => `<span class="tag">${esc(k)}</span>`).join('')}</div></div></div>`).join('')}</div>
         <div class="f">
-          <p class="brand-line">${brand}</p>
-          <p class="meta-line">${wm} · Powered by ImageVault</p>
+          <p class="brand-line">${esc(brand)}</p>
+          <p class="meta-line">${esc(wm)} · Powered by ImageVault</p>
         </div>
       </body></html>`;
       const blob = new Blob([html], { type: 'text/html' });
@@ -3229,10 +3239,7 @@ function UniversalSearch() {
   const results = useMemo(() => {
     if (!query.trim()) return null;
     const q = query.toLowerCase();
-    const matches = { images: [], customers: [], collections: [],   campaigns: [],
-  notifications: [],
-  imageVersions: {},
-  firebase: { connected: false, projectId: '', apiKey: '', authDomain: '', storageBucket: '', appId: '', useFirestore: false, useStorage: false, useAuth: false }, settings: [] };
+    const matches = { images: [], customers: [], collections: [], campaigns: [], settings: [] };
     matches.images = data.images.filter(i => i.name.toLowerCase().includes(q) || i.keywords.some(k => k.toLowerCase().includes(q))).slice(0, 5);
     matches.customers = (data.customers || []).filter(c => c.name.toLowerCase().includes(q) || c.phone.includes(q)).slice(0, 5);
     matches.collections = (data.collections || []).filter(c => c.name.toLowerCase().includes(q) || (c.theme || '').toLowerCase().includes(q)).slice(0, 5);
